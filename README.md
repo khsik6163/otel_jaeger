@@ -47,6 +47,10 @@ kubectl apply -f 04-online-boutique.yaml
 | `http://<node-ip>:32686` | Jaeger UI |
 
 ---
+<img width="1457" height="855" alt="image" src="https://github.com/user-attachments/assets/a2a297f7-ac9b-478f-927f-5f424af348a0" />
+<img width="1457" height="855" alt="image" src="https://github.com/user-attachments/assets/3ffa9ef5-9775-4510-8ccd-c2d8fadd380e" />
+<img width="1457" height="855" alt="image" src="https://github.com/user-attachments/assets/163ea631-8014-485a-ab71-569bfc792d8d" />
+<img width="1457" height="855" alt="image" src="https://github.com/user-attachments/assets/17bfb120-c85c-4a33-867f-542fd9af2e7f" />
 
 ## Docs
 
