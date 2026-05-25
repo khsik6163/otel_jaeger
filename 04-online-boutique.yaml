@@ -1,0 +1,1154 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: currencyservice
+  name: currencyservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: currencyservice
+  template:
+    metadata:
+      labels:
+        app: currencyservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '7000'
+        - name: DISABLE_PROFILER
+          value: '1'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: currencyservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/currencyservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 7000
+          initialDelaySeconds: 60
+          failureThreshold: 10
+        name: server
+        ports:
+        - containerPort: 7000
+          name: grpc
+        readinessProbe:
+          grpc:
+            port: 7000
+          initialDelaySeconds: 60
+          failureThreshold: 10
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: currencyservice
+      terminationGracePeriodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: currencyservice
+  name: currencyservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 7000
+    targetPort: 7000
+  selector:
+    app: currencyservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: currencyservice
+  namespace: online-boutique
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: locustfile
+  namespace: online-boutique
+data:
+  locustfile.py: |
+    import random
+    from locust import FastHttpUser, TaskSet, between
+    import datetime
+
+    products = [
+        '0PUK6V6EV0', '1YMWWN1N4O', '2ZYFJ3GM2N', '66VCHSJNUP',
+        '6E92ZMYYFZ', '9SIQT8TOJO', 'L9ECAV7KIM', 'LS4PSXUNUM', 'OLJCESPC7Z']
+
+    _names = ['alice','bob','carol','dave','eve','frank','grace','hal']
+    _domains = ['example.com','test.org','demo.net']
+    _streets = ['Main St','Oak Ave','Maple Dr','Pine Rd','Cedar Ln']
+    _cities = ['Springfield','Shelbyville','Ogdenville','North Haverbrook']
+    _states = ['CA','NY','TX','FL','WA','OR','IL','PA']
+    _countries = ['US','CA','GB','AU','DE','FR']
+    _visa_test_cards = [
+        '4111111111111111', '4242424242424242', '4000056655665556',
+        '4012888888881881', '4222222222222', '4000058260000005',
+    ]
+
+    def _fake_email():
+        return f"{random.choice(_names)}{random.randint(1,999)}@{random.choice(_domains)}"
+
+    def _fake_street():
+        return f"{random.randint(100,9999)} {random.choice(_streets)}"
+
+    def _fake_zip():
+        return f"{random.randint(10000,99999)}"
+
+    def _fake_city():
+        return random.choice(_cities)
+
+    def _fake_state():
+        return random.choice(_states)
+
+    def _fake_country():
+        return random.choice(_countries)
+
+    def _fake_cc():
+        return random.choice(_visa_test_cards)
+
+    def index(l):
+        l.client.get("/")
+
+    def setCurrency(l):
+        currencies = ['EUR', 'USD', 'JPY', 'CAD', 'GBP', 'TRY']
+        l.client.post("/setCurrency", {'currency_code': random.choice(currencies)})
+
+    def browseProduct(l):
+        l.client.get("/product/" + random.choice(products))
+
+    def viewCart(l):
+        l.client.get("/cart")
+
+    def addToCart(l):
+        product = random.choice(products)
+        l.client.get("/product/" + product)
+        l.client.post("/cart", {'product_id': product, 'quantity': random.randint(1, 10)})
+
+    def empty_cart(l):
+        l.client.post('/cart/empty')
+
+    def checkout(l):
+        addToCart(l)
+        current_year = datetime.datetime.now().year + 1
+        l.client.post("/cart/checkout", {
+            'email': _fake_email(),
+            'street_address': _fake_street(),
+            'zip_code': _fake_zip(),
+            'city': _fake_city(),
+            'state': _fake_state(),
+            'country': _fake_country(),
+            'credit_card_number': _fake_cc(),
+            'credit_card_expiration_month': random.randint(1, 12),
+            'credit_card_expiration_year': random.randint(current_year, current_year + 10),
+            'credit_card_cvv': f"{random.randint(100, 999)}",
+        })
+
+    def logout(l):
+        l.client.get('/logout')
+
+    class UserBehavior(TaskSet):
+        def on_start(self):
+            index(self)
+        tasks = {index: 1, setCurrency: 2, browseProduct: 10, addToCart: 2, viewCart: 3, checkout: 1}
+
+    class WebsiteUser(FastHttpUser):
+        tasks = [UserBehavior]
+        wait_time = between(1, 10)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: loadgenerator
+  name: loadgenerator
+  namespace: online-boutique
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loadgenerator
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/rewriteAppHTTPProbers: 'true'
+      labels:
+        app: loadgenerator
+    spec:
+      containers:
+      - name: main
+        image: locustio/locust:2.43.4
+        command:
+        - locust
+        - --host=http://frontend:80
+        - -f=/config/locustfile.py
+        - --headless
+        - --users=10
+        - --spawn-rate=1
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - name: locustfile
+          mountPath: /config
+      initContainers:
+      - command:
+        - /bin/sh
+        - -exc
+        - |
+          RETRY_INTERVAL=10
+          while true; do
+            echo "Pinging frontend: ${FRONTEND_ADDR}..."
+            STATUSCODE=$(wget --server-response http://${FRONTEND_ADDR} 2>&1 | awk '/^  HTTP/{print $2}')
+            if [ "$STATUSCODE" = "200" ]; then
+              echo "Frontend is reachable."
+              exit 0
+            fi
+            echo "Waiting for frontend (status: ${STATUSCODE:-none})..."
+            sleep $RETRY_INTERVAL
+          done
+        env:
+        - name: FRONTEND_ADDR
+          value: frontend:80
+        image: busybox:latest
+        name: frontend-check
+      restartPolicy: Always
+      serviceAccountName: loadgenerator
+      terminationGracePeriodSeconds: 5
+      volumes:
+      - name: locustfile
+        configMap:
+          name: locustfile
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loadgenerator
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: productcatalogservice
+  name: productcatalogservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: productcatalogservice
+  template:
+    metadata:
+      labels:
+        app: productcatalogservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '3550'
+        - name: DISABLE_PROFILER
+          value: '1'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: productcatalogservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/productcatalogservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 3550
+        name: server
+        ports:
+        - containerPort: 3550
+        readinessProbe:
+          grpc:
+            port: 3550
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: productcatalogservice
+      terminationGracePeriodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: productcatalogservice
+  name: productcatalogservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 3550
+    targetPort: 3550
+  selector:
+    app: productcatalogservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: productcatalogservice
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: checkoutservice
+  name: checkoutservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: checkoutservice
+  template:
+    metadata:
+      labels:
+        app: checkoutservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '5050'
+        - name: PRODUCT_CATALOG_SERVICE_ADDR
+          value: productcatalogservice:3550
+        - name: SHIPPING_SERVICE_ADDR
+          value: shippingservice:50051
+        - name: PAYMENT_SERVICE_ADDR
+          value: paymentservice:50051
+        - name: EMAIL_SERVICE_ADDR
+          value: emailservice:5000
+        - name: CURRENCY_SERVICE_ADDR
+          value: currencyservice:7000
+        - name: CART_SERVICE_ADDR
+          value: cartservice:7070
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: checkoutservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/checkoutservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 5050
+        name: server
+        ports:
+        - containerPort: 5050
+        readinessProbe:
+          grpc:
+            port: 5050
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: checkoutservice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: checkoutservice
+  name: checkoutservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 5050
+    targetPort: 5050
+  selector:
+    app: checkoutservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: checkoutservice
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: shippingservice
+  name: shippingservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: shippingservice
+  template:
+    metadata:
+      labels:
+        app: shippingservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '50051'
+        - name: DISABLE_PROFILER
+          value: '1'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: OTEL_SERVICE_NAME
+          value: shippingservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/shippingservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 50051
+        name: server
+        ports:
+        - containerPort: 50051
+        readinessProbe:
+          grpc:
+            port: 50051
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+      securityContext:
+        fsGroup: 1000
+      serviceAccountName: shippingservice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: shippingservice
+  name: shippingservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+  selector:
+    app: shippingservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shippingservice
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: cartservice
+  name: cartservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: cartservice
+  template:
+    metadata:
+      labels:
+        app: cartservice
+    spec:
+      containers:
+      - env:
+        - name: REDIS_ADDR
+          value: redis-cart:6379
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: cartservice
+        - name: DOTNET_GCConserveMemory
+          value: '9'
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/cartservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 7070
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+          timeoutSeconds: 5
+        name: server
+        ports:
+        - containerPort: 7070
+        readinessProbe:
+          grpc:
+            port: 7070
+          initialDelaySeconds: 60
+          failureThreshold: 10
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: 300m
+            memory: 256Mi
+          requests:
+            cpu: 200m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp-dir
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: cartservice
+      terminationGracePeriodSeconds: 5
+      volumes:
+      - emptyDir: {}
+        name: tmp-dir
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: cartservice
+  name: cartservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 7070
+    targetPort: 7070
+  selector:
+    app: cartservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cartservice
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: redis-cart
+  name: redis-cart
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: redis-cart
+  template:
+    metadata:
+      labels:
+        app: redis-cart
+    spec:
+      containers:
+      - image: redis:alpine
+        livenessProbe:
+          periodSeconds: 5
+          tcpSocket:
+            port: 6379
+        name: redis
+        ports:
+        - containerPort: 6379
+        readinessProbe:
+          periodSeconds: 5
+          tcpSocket:
+            port: 6379
+        resources:
+          limits:
+            cpu: 125m
+            memory: 256Mi
+          requests:
+            cpu: 70m
+            memory: 200Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /data
+          name: redis-data
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      volumes:
+      - emptyDir: {}
+        name: redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: redis-cart
+  name: redis-cart
+  namespace: online-boutique
+spec:
+  ports:
+  - name: tcp-redis
+    port: 6379
+    targetPort: 6379
+  selector:
+    app: redis-cart
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: emailservice
+  name: emailservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: emailservice
+  template:
+    metadata:
+      labels:
+        app: emailservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '8080'
+        - name: DISABLE_PROFILER
+          value: '1'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: emailservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/emailservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+        name: server
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          grpc:
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: emailservice
+      terminationGracePeriodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: emailservice
+  name: emailservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 5000
+    targetPort: 8080
+  selector:
+    app: emailservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: emailservice
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: paymentservice
+  name: paymentservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: paymentservice
+  template:
+    metadata:
+      labels:
+        app: paymentservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '50051'
+        - name: DISABLE_PROFILER
+          value: '1'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: paymentservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/paymentservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 50051
+          initialDelaySeconds: 60
+          failureThreshold: 10
+        name: server
+        ports:
+        - containerPort: 50051
+        readinessProbe:
+          grpc:
+            port: 50051
+          initialDelaySeconds: 60
+          failureThreshold: 10
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: paymentservice
+      terminationGracePeriodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: paymentservice
+  name: paymentservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+  selector:
+    app: paymentservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: paymentservice
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: frontend
+  name: frontend
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/rewriteAppHTTPProbers: 'true'
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '8080'
+        - name: PRODUCT_CATALOG_SERVICE_ADDR
+          value: productcatalogservice:3550
+        - name: CURRENCY_SERVICE_ADDR
+          value: currencyservice:7000
+        - name: CART_SERVICE_ADDR
+          value: cartservice:7070
+        - name: RECOMMENDATION_SERVICE_ADDR
+          value: recommendationservice:8080
+        - name: SHIPPING_SERVICE_ADDR
+          value: shippingservice:50051
+        - name: CHECKOUT_SERVICE_ADDR
+          value: checkoutservice:5050
+        - name: AD_SERVICE_ADDR
+          value: adservice:9555
+        - name: SHOPPING_ASSISTANT_SERVICE_ADDR
+          value: shoppingassistantservice:80
+        - name: ENABLE_PROFILER
+          value: '0'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: frontend
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/frontend:v0.10.5
+        livenessProbe:
+          httpGet:
+            httpHeaders:
+            - name: Cookie
+              value: shop_session-id=x-liveness-probe
+            path: /_healthz
+            port: 8080
+          initialDelaySeconds: 10
+        name: server
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            httpHeaders:
+            - name: Cookie
+              value: shop_session-id=x-readiness-probe
+            path: /_healthz
+            port: 8080
+          initialDelaySeconds: 10
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: frontend
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: frontend
+  name: frontend
+  namespace: online-boutique
+spec:
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  selector:
+    app: frontend
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: frontend
+  name: frontend-external
+  namespace: online-boutique
+spec:
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    nodePort: 30080
+  selector:
+    app: frontend
+  type: NodePort
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: frontend
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: recommendationservice
+  name: recommendationservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: recommendationservice
+  template:
+    metadata:
+      labels:
+        app: recommendationservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '8080'
+        - name: PRODUCT_CATALOG_SERVICE_ADDR
+          value: productcatalogservice:3550
+        - name: DISABLE_PROFILER
+          value: '1'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: recommendationservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/recommendationservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+        name: server
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          grpc:
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          failureThreshold: 10
+        resources:
+          limits:
+            cpu: 200m
+            memory: 450Mi
+          requests:
+            cpu: 100m
+            memory: 220Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: recommendationservice
+      terminationGracePeriodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: recommendationservice
+  name: recommendationservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 8080
+    targetPort: 8080
+  selector:
+    app: recommendationservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recommendationservice
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: adservice
+  name: adservice
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: adservice
+  template:
+    metadata:
+      labels:
+        app: adservice
+    spec:
+      containers:
+      - env:
+        - name: PORT
+          value: '9555'
+        - name: COLLECTOR_SERVICE_ADDR
+          value: opentelemetrycollector:4317
+        - name: ENABLE_TRACING
+          value: '1'
+        - name: OTEL_SERVICE_NAME
+          value: adservice
+        image: us-central1-docker.pkg.dev/google-samples/microservices-demo/adservice:v0.10.5
+        livenessProbe:
+          grpc:
+            port: 9555
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          failureThreshold: 10
+          timeoutSeconds: 5
+        name: server
+        ports:
+        - containerPort: 9555
+        readinessProbe:
+          grpc:
+            port: 9555
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          failureThreshold: 10
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: 300m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: adservice
+      terminationGracePeriodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: adservice
+  name: adservice
+  namespace: online-boutique
+spec:
+  ports:
+  - name: grpc
+    port: 9555
+    targetPort: 9555
+  selector:
+    app: adservice
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: adservice
+  namespace: online-boutique

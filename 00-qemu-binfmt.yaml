@@ -1,0 +1,47 @@
+---
+# nsenter로 호스트 Ubuntu에 qemu-user-static 설치
+# 설치 시 update-binfmts가 자동으로 binfmt_misc 등록
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: qemu-binfmt
+  namespace: kube-system
+  labels:
+    app: qemu-binfmt
+spec:
+  selector:
+    matchLabels:
+      app: qemu-binfmt
+  template:
+    metadata:
+      labels:
+        app: qemu-binfmt
+    spec:
+      hostPID: true
+      hostNetwork: true
+      initContainers:
+      - name: qemu-install
+        image: ubuntu:22.04
+        command:
+        - nsenter
+        - -m
+        - -u
+        - -i
+        - -n
+        - -p
+        - -t
+        - "1"
+        - --
+        - sh
+        - -c
+        - |
+          apt-get update -qq 2>/dev/null
+          apt-get install -y qemu-user-static 2>/dev/null
+          update-binfmts --enable qemu-x86_64 2>/dev/null || true
+          echo "qemu-x86_64 registration done"
+          cat /proc/sys/fs/binfmt_misc/qemu-x86_64 2>/dev/null | head -3 || echo "not registered"
+        securityContext:
+          privileged: true
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.9
