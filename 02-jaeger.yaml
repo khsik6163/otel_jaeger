@@ -1,0 +1,86 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: jaeger
+  name: jaeger
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+      - env:
+        - name: COLLECTOR_OTLP_ENABLED
+          value: 'true'
+        - name: SPAN_STORAGE_TYPE
+          value: memory
+        image: jaegertracing/all-in-one:1.57
+        name: jaeger
+        ports:
+        - containerPort: 16686
+        - containerPort: 4317
+        - containerPort: 4318
+        - containerPort: 14250
+        - containerPort: 14268
+        - containerPort: 9411
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: jaeger
+  name: jaeger
+  namespace: online-boutique
+spec:
+  ports:
+  - name: ui
+    port: 16686
+    targetPort: 16686
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+  - name: collector-grpc
+    port: 14250
+    targetPort: 14250
+  - name: collector-http
+    port: 14268
+    targetPort: 14268
+  - name: zipkin
+    port: 9411
+    targetPort: 9411
+  selector:
+    app: jaeger
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: jaeger
+  name: jaeger-ui
+  namespace: online-boutique
+spec:
+  ports:
+  - name: ui
+    nodePort: 32686
+    port: 16686
+    targetPort: 16686
+  selector:
+    app: jaeger
+  type: NodePort

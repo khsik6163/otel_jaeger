@@ -1,0 +1,72 @@
+---
+apiVersion: v1
+data:
+  config.yaml: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint:\
+    \ 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\n\nprocessors:\n \
+    \ batch:\n    timeout: 5s\n    send_batch_size: 1024\n\nexporters:\n  otlp:\n\
+    \    endpoint: jaeger:4317\n    tls:\n      insecure: true\n  debug:\n    verbosity:\
+    \ basic\n\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n    \
+    \  processors: [batch]\n      exporters: [otlp, debug]\n"
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: online-boutique
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: opentelemetrycollector
+  name: opentelemetrycollector
+  namespace: online-boutique
+spec:
+  selector:
+    matchLabels:
+      app: opentelemetrycollector
+  template:
+    metadata:
+      labels:
+        app: opentelemetrycollector
+    spec:
+      containers:
+      - args:
+        - --config=/conf/config.yaml
+        image: otel/opentelemetry-collector-contrib:0.99.0
+        name: otel-collector
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+        - containerPort: 4318
+          name: otlp-http
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /conf
+          name: config
+      volumes:
+      - configMap:
+          name: otel-collector-config
+        name: config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: opentelemetrycollector
+  name: opentelemetrycollector
+  namespace: online-boutique
+spec:
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+  selector:
+    app: opentelemetrycollector
